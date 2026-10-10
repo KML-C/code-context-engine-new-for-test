@@ -153,3 +153,57 @@ async def test_peer_publishing_during_cleanup_keeps_its_rendezvous(tmp_path, mon
 
     assert port_file.read_text() == str(peer_port)
     assert rendezvous.read_text() == str(peer_port)
+
+
+@pytest.mark.asyncio
+async def test_last_started_server_exiting_hands_rendezvous_to_live_peer(tmp_path, monkeypatch):
+    """A short-lived server started after a long-running one (a headless agent
+    next to an interactive session) holds the port files when it exits: they
+    must move to the survivor, not disappear."""
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    port_file = storage_base / "serve.port"
+    rendezvous = fake_home / ".cce" / "projects" / "proj_handover" / "serve.port"
+
+    first, first_port = await start_hook_server(
+        storage_base=storage_base, project_name="proj_handover",
+    )
+    second, second_port = await start_hook_server(
+        storage_base=storage_base, project_name="proj_handover",
+    )
+    try:
+        assert port_file.read_text() == str(second_port)
+        await second.cleanup()
+        assert port_file.read_text() == str(first_port)
+        assert rendezvous.read_text() == str(first_port)
+    finally:
+        await first.cleanup()
+
+    assert not port_file.exists()
+    assert not rendezvous.exists()
+    assert list((storage_base / hook_server.PORT_REGISTRY_NAME).iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_dead_peer_in_registry_is_pruned_not_published(tmp_path, monkeypatch):
+    """A peer killed without cleanup leaves its registry entry: the exiting
+    server must not hand the rendezvous to that dead port."""
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    storage_base = tmp_path / "storage"
+    storage_base.mkdir()
+    port_file = storage_base / "serve.port"
+
+    runner, _ = await start_hook_server(storage_base=storage_base, project_name="proj_dead")
+    registry = storage_base / hook_server.PORT_REGISTRY_NAME
+    dead_port = hook_server._find_free_port()  # nothing listens on it
+    (registry / str(dead_port)).write_text("0", encoding="utf-8")
+
+    await runner.cleanup()
+
+    assert not port_file.exists()
+    assert not (registry / str(dead_port)).exists()

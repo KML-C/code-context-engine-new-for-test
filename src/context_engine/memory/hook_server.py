@@ -36,6 +36,11 @@ log = logging.getLogger(__name__)
 # `cce serve` processes of one project.
 PORT_LOCK_NAME = "serve.port.lock"
 _PORT_LOCK_TIMEOUT_S = 2.0
+# Directory, next to serve.port, holding one entry per running server (file
+# name = its port). On exit, a server whose port is still published hands the
+# rendezvous over to the most recent live peer instead of leaving none.
+PORT_REGISTRY_NAME = "serve.ports"
+_PEER_PROBE_TIMEOUT_S = 0.2
 
 
 @contextlib.contextmanager
@@ -80,9 +85,55 @@ def _port_files_lock(lock_path: Path, timeout: float = _PORT_LOCK_TIMEOUT_S) -> 
         os.close(fd)
 
 
-def _publish_port(port_files: list[Path], port: int, lock_path: Path) -> None:
+def _register_port(registry: Path, port: int) -> None:
+    try:
+        registry.mkdir(parents=True, exist_ok=True)
+        (registry / str(port)).write_text(str(os.getpid()), encoding="utf-8")
+    except OSError as exc:
+        log.warning("serve.port registry write failed for %s: %s", registry, exc)
+
+
+def _port_is_live(port: int) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=_PEER_PROBE_TIMEOUT_S):
+            return True
+    except OSError:
+        return False
+
+
+def _live_successor(registry: Path, own: int | None) -> int | None:
+    """Most recently registered peer that still accepts connections.
+
+    Entries of peers that are gone (killed without cleanup) are removed on
+    the way, so the registry does not grow across crashes.
+    """
+    try:
+        entries = [e for e in registry.iterdir() if e.name.isdigit()]
+    except OSError:
+        return None
+    candidates = []
+    for entry in entries:
+        port = int(entry.name)
+        if port == own:
+            continue
+        try:
+            candidates.append((entry.stat().st_mtime, port, entry))
+        except OSError:
+            continue
+    for _, port, entry in sorted(candidates, reverse=True):
+        if _port_is_live(port):
+            return port
+        entry.unlink(missing_ok=True)
+    return None
+
+
+def _publish_port(
+    port_files: list[Path], port: int, lock_path: Path, registry: Path | None = None
+) -> None:
     """Write `port` to every port file, under the port-files lock."""
     with _port_files_lock(lock_path):
+        if registry is not None:
+            _register_port(registry, port)
         written: set[Path] = set()
         for f in port_files:
             try:
@@ -124,6 +175,7 @@ async def start_hook_server(
     # Authoritative port file lives in the project's storage_base.
     port_file = Path(storage_base) / "serve.port"
     lock_path = Path(storage_base) / PORT_LOCK_NAME
+    registry = Path(storage_base) / PORT_REGISTRY_NAME
     # Stable rendezvous file at the *default* storage location. The hook
     # shell script always looks here (`${HOME}/.cce/projects/<name>/serve.port`)
     # because it has no way to read the user's config.yaml. When storage_path
@@ -157,6 +209,12 @@ async def start_hook_server(
         # one exits they may name another live server: only remove a file
         # that still holds *this* server's port, or the survivors' hooks
         # lose their rendezvous.
+        #
+        # A file that does hold this server's port is handed over to the
+        # most recent live peer rather than deleted: otherwise a short-lived
+        # server started after a long-running one (e.g. a headless agent run
+        # next to an interactive session) would leave the survivor without
+        # a rendezvous on exit.
         own = bound.get("port")
         # Compare-and-delete under the same lock as publication, so a peer
         # cannot write its port between the read and the unlink.
@@ -166,9 +224,15 @@ async def start_hook_server(
                 # peer's rendezvous (a stale file is caught by the hook's
                 # socket-liveness probe).
                 return
+            if own is not None:
+                (registry / str(own)).unlink(missing_ok=True)
+            successor = _live_successor(registry, own)
             for f in app.get("_port_files", []):
                 try:
                     if own is not None and f.read_text(encoding="utf-8").strip() != str(own):
+                        continue
+                    if successor is not None:
+                        f.write_text(str(successor), encoding="utf-8")
                         continue
                     f.unlink(missing_ok=True)
                 except FileNotFoundError:
@@ -187,7 +251,7 @@ async def start_hook_server(
     await site.start()
     bound["port"] = port
 
-    _publish_port([port_file, default_rendezvous], port, lock_path)
+    _publish_port([port_file, default_rendezvous], port, lock_path, registry)
 
     log.info("Memory hook server listening on 127.0.0.1:%d", port)
     return runner, port
