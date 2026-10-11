@@ -1345,6 +1345,7 @@ class ContextEngineMCP:
         # on the *compressed* form so recall scores are consistent with
         # what's stored. session_recall expands on the read side via
         # `_format_*_in_id_order` so the agent sees natural prose.
+        db_failed = False
         if self._memory_conn is not None:
             try:
                 import time as _time
@@ -1375,7 +1376,20 @@ class ContextEngineMCP:
                 )
                 self._memory_conn.commit()
             except Exception:
+                memory_db.rollback_quietly(self._memory_conn)
+                db_failed = True
                 log.exception("memory.db decision dual-write failed")
+        if db_failed:
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        f"⚠ Decision kept in the session file only; the "
+                        f"memory.db write failed (see the cce serve log), so "
+                        f"session_recall will not return it: {decision}"
+                    ),
+                )
+            ]
         return [
             TextContent(
                 type="text",
@@ -1396,6 +1410,7 @@ class ContextEngineMCP:
             self._session_id, file_path, description
         )
         self._persist_current_session()
+        db_failed = False
         if self._memory_conn is not None:
             try:
                 import time as _time
@@ -1407,7 +1422,20 @@ class ContextEngineMCP:
                 )
                 self._memory_conn.commit()
             except Exception:
+                memory_db.rollback_quietly(self._memory_conn)
+                db_failed = True
                 log.exception("memory.db code_area dual-write failed")
+        if db_failed:
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        f"⚠ Code area kept in the session file only; the "
+                        f"memory.db write failed (see the cce serve log): "
+                        f"{file_path} — {description}"
+                    ),
+                )
+            ]
         return [
             TextContent(
                 type="text",

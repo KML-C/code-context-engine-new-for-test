@@ -240,6 +240,7 @@ async def handle_session_start(request: web.Request) -> web.Response:
         )
         conn.commit()
     except Exception:
+        memory_db.rollback_quietly(conn)
         log.exception("SessionStart insert failed")
         return web.Response(text="", status=202)
 
@@ -299,6 +300,7 @@ async def handle_user_prompt_submit(request: web.Request) -> web.Response:
             )
         conn.commit()
     except Exception:
+        memory_db.rollback_quietly(conn)
         log.exception("UserPromptSubmit insert failed")
         return web.json_response({"ok": False}, status=202)
     return web.json_response({"ok": True, "prompt_number": prompt_number})
@@ -359,6 +361,7 @@ async def handle_post_tool_use(request: web.Request) -> web.Response:
         )
         conn.commit()
     except Exception:
+        memory_db.rollback_quietly(conn)
         log.exception("PostToolUse insert failed")
         return web.json_response({"ok": False}, status=202)
     return web.json_response({"ok": True})
@@ -389,6 +392,7 @@ async def handle_stop(request: web.Request) -> web.Response:
             )
         conn.commit()
     except Exception:
+        memory_db.rollback_quietly(conn)
         log.exception("Stop enqueue failed")
         return web.Response(status=202)
 
@@ -486,6 +490,7 @@ async def handle_session_end(request: web.Request) -> web.Response:
         )
         conn.commit()
     except Exception:
+        memory_db.rollback_quietly(conn)
         log.exception("SessionEnd update failed")
         return web.json_response({"ok": False}, status=202)
     return web.json_response({"ok": True})
