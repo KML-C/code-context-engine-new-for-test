@@ -127,12 +127,30 @@ def _live_successor(registry: Path, own: int | None) -> int | None:
     return None
 
 
+def _prune_dead_peers(registry: Path, own: int) -> None:
+    """Drop every registry entry whose port no longer accepts connections.
+
+    Servers killed without cleanup (TerminateProcess on Windows, SIGKILL)
+    never remove their entry, and `_live_successor` stops at the first live
+    peer, so without this sweep the registry only grows. Run at each start,
+    under the port-files lock.
+    """
+    try:
+        entries = [e for e in registry.iterdir() if e.name.isdigit() and int(e.name) != own]
+    except OSError:
+        return
+    for entry in entries:
+        if not _port_is_live(int(entry.name)):
+            entry.unlink(missing_ok=True)
+
+
 def _publish_port(
     port_files: list[Path], port: int, lock_path: Path, registry: Path | None = None
 ) -> None:
     """Write `port` to every port file, under the port-files lock."""
     with _port_files_lock(lock_path):
         if registry is not None:
+            _prune_dead_peers(registry, port)
             _register_port(registry, port)
         written: set[Path] = set()
         for f in port_files:

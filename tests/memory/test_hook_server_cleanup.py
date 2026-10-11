@@ -207,3 +207,26 @@ async def test_dead_peer_in_registry_is_pruned_not_published(tmp_path, monkeypat
 
     assert not port_file.exists()
     assert not (registry / str(dead_port)).exists()
+
+
+@pytest.mark.asyncio
+async def test_start_prunes_registry_entries_of_dead_peers(tmp_path, monkeypatch):
+    """Peers killed without cleanup never remove their entry; the next start
+    must sweep them, live peers excepted, so the registry does not grow."""
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    storage_base = tmp_path / "storage"
+    registry = storage_base / hook_server.PORT_REGISTRY_NAME
+    registry.mkdir(parents=True)
+    dead = [hook_server._find_free_port() for _ in range(3)]  # nothing listens on them
+    for port in dead:
+        (registry / str(port)).write_text("0", encoding="utf-8")
+
+    first, first_port = await start_hook_server(storage_base=storage_base, project_name="proj_sweep")
+    second, second_port = await start_hook_server(storage_base=storage_base, project_name="proj_sweep")
+    try:
+        assert sorted(e.name for e in registry.iterdir()) == sorted([str(first_port), str(second_port)])
+    finally:
+        await second.cleanup()
+        await first.cleanup()
