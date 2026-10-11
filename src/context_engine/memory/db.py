@@ -685,6 +685,24 @@ BUCKETS = (
 )
 
 
+def rollback_quietly(conn: sqlite3.Connection) -> None:
+    """Roll back after a swallowed write error.
+
+    sqlite3 opens a transaction implicitly before an INSERT/UPDATE and
+    keeps it open when the statement fails (e.g. "database is locked"
+    while another `cce serve` holds the write lock). Left open, the
+    connection pins its read snapshot: every later write on it fails
+    immediately with SQLITE_BUSY, reads stay stale, the WAL cannot be
+    checkpointed past it, and a partial write would be committed by the
+    next unrelated commit(). Every `except` that swallows a write error on
+    a long-lived connection must call this.
+    """
+    try:
+        conn.rollback()
+    except sqlite3.Error:
+        log.debug("rollback after failed write also failed", exc_info=True)
+
+
 def record_savings(
     conn: sqlite3.Connection,
     *,
@@ -714,6 +732,7 @@ def record_savings(
         )
         conn.commit()
     except sqlite3.Error as exc:
+        rollback_quietly(conn)
         log.debug("record_savings(%s) failed: %s", bucket, exc)
 
 
