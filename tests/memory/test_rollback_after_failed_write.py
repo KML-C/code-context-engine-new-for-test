@@ -89,6 +89,10 @@ def test_record_decision_reports_and_recovers_after_locked_write(mcp):
     assert not conn.in_transaction
     peer.rollback()
     peer.close()
+    # Back to the production busy_timeout: the server's own vec-backfill thread may
+    # write concurrently. A transaction left open would still fail at once
+    # (SQLITE_BUSY_SNAPSHOT does not wait), so the test stays discriminating.
+    conn.execute("PRAGMA busy_timeout = 5000")
 
     # A read on this connection, then a commit by another server: with the
     # transaction left open, the read would pin a stale snapshot and every
@@ -142,6 +146,7 @@ async def test_hook_rolls_back_when_locked_and_recovers(hook_app, aiohttp_client
     assert not conn.in_transaction
     peer.rollback()
     peer.close()
+    conn.execute("PRAGMA busy_timeout = 5000")
 
     conn.execute("SELECT COUNT(*) FROM prompts").fetchone()
     _peer_commits_a_decision(db_path)
