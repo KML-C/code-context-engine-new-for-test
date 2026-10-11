@@ -2,6 +2,25 @@
 
 All notable changes to Code Context Engine are documented here.
 
+## [0.4.26+aap.1] - 2026-10-11 (KML-C fork, used by AAP)
+
+Fork of elara-labs/code-context-engine `main@7507115` (0.4.26) with the fixes
+proposed upstream but not yet merged there:
+
+### Fixed
+- `serve.port` is removed on exit only when it still holds this server's port,
+  under a cross-process lock; it is handed over to the most recent live peer
+  (`serve.ports/` registry), and dead registry entries are swept at each start
+  (upstream PR #163).
+- PostToolUse stores Claude Code's `tool_response` (tool outputs were stored
+  empty) (upstream issue #164, PR #166).
+- `.cceignore` patterns starting with `.` now match root entries, and
+  `cce index --path` honours directory exclusions (upstream issue #165, PR #167).
+
+### Added
+- `CCE_NO_HOOK_SERVER=1`: `cce serve` starts no hook listener and never touches
+  `serve.port` (for headless agent runs) (upstream PR #163).
+
 ## [0.4.17] - 2026-05-04
 
 ### Added
